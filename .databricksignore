@@ -1,0 +1,13 @@
+src/app/frontend/node_modules/
+src/app/frontend/src/
+src/app/frontend/public/
+src/app/frontend/package.json
+src/app/frontend/package-lock.json
+src/app/frontend/vite.config.js
+src/app/frontend/index.html
+src/app/app.py
+config/
+data/
+pipelines/
+notebooks/
+app/

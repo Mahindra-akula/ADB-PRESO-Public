@@ -1,0 +1,11 @@
+resources:
+  jobs:
+    data_gen_job:
+      name: "[${bundle.target}] Retail - Synthetic Data Generation"
+      tasks:
+        - task_key: generate_data
+          notebook_task:
+            notebook_path: ../src/data/00_synthetic_data_gen.py
+            source: WORKSPACE
+      queue:
+        enabled: true

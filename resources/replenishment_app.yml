@@ -1,0 +1,6 @@
+resources:
+  apps:
+    replenishment_app:
+      name: retail-replenishment
+      description: "Retail Replenishment Intelligence — 800-store demand signal platform"
+      source_code_path: ../src/app

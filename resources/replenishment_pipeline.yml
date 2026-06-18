@@ -1,0 +1,12 @@
+resources:
+  pipelines:
+    replenishment_pipeline:
+      name: "[${bundle.target}] Retail Replenishment Pipeline"
+      serverless: true
+      catalog: retail_intelligence
+      target: retail_data
+      libraries:
+        - notebook:
+            path: ../src/pipelines/dlt_pipeline.py
+      continuous: false
+      channel: PREVIEW

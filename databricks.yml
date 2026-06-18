@@ -1,0 +1,13 @@
+bundle:
+  name: retail-replenishment
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: https://dbc-eaeac0c1-f644.cloud.databricks.com
+      profile: DEFAULT
