@@ -9,3 +9,13 @@ command:
 env:
   - name: WAREHOUSE_ID
     value: "4e7b8de25b26878f"
+  - name: ORDER_EMAIL_TO
+    value: "igotu9999@gmail.com"
+  - name: ORDER_EMAIL_FROM
+    value: "igotu9999@gmail.com"
+  - name: ORDER_EMAIL_PASSWORD
+    value: "PASTE_APP_PASSWORD_HERE"
+  - name: SMTP_HOST
+    value: "smtp.gmail.com"
+  - name: SMTP_PORT
+    value: "587"

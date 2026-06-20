@@ -1,7 +1,12 @@
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 
@@ -126,6 +131,56 @@ def platform_stats():
         result.append({"table": tbl, "layer": layer, "rows": int(rows[0]["cnt"])})
     last = query("SELECT MAX(signal_date) AS last_updated FROM retail_intelligence.retail_data.replenishment_signals")
     return {"tables": result, "last_updated": str(last[0]["last_updated"])}
+
+
+# ── Order SKU endpoint ─────────────────────────────────────────────────────────
+
+class OrderRequest(BaseModel):
+    store_id: str
+    sku_id: str
+    region: str = ""
+    category: str = ""
+    days_of_supply: float = 0
+    inventory_on_hand: int = 0
+    avg_daily_demand_7d: float = 0
+
+
+@app.post("/api/order-sku")
+def order_sku(req: OrderRequest):
+    to_addr = os.environ.get("ORDER_EMAIL_TO", "")
+    if to_addr:
+        from_addr = os.environ.get("ORDER_EMAIL_FROM", "replenishment@retail-demo.com")
+        password  = os.environ.get("ORDER_EMAIL_PASSWORD", "")
+        smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+
+        msg = MIMEMultipart()
+        msg["From"]    = from_addr
+        msg["To"]      = to_addr
+        msg["Subject"] = f"URGENT: Purchase Order — SKU {req.sku_id} · Store {req.store_id}"
+        body = (
+            f"AUTOMATED REPLENISHMENT ORDER\n{'─'*40}\n"
+            f"Region:            {req.region}\n"
+            f"Store:             {req.store_id}\n"
+            f"SKU:               {req.sku_id}\n"
+            f"Category:          {req.category}\n"
+            f"Current Stock:     {req.inventory_on_hand} units\n"
+            f"Days of Supply:    {req.days_of_supply} days\n"
+            f"Avg Daily Demand:  {req.avg_daily_demand_7d} units/day\n\n"
+            f"Status: REORDER NOW — stock critically low.\n"
+            f"Triggered from the Retail Replenishment Intelligence platform."
+        )
+        msg.attach(MIMEText(body, "plain"))
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port) as srv:
+                srv.starttls()
+                if password:
+                    srv.login(from_addr, password)
+                srv.sendmail(from_addr, to_addr, msg.as_string())
+        except Exception:
+            pass
+
+    return {"ok": True, "store_id": req.store_id, "sku_id": req.sku_id}
 
 
 # ── Serve React SPA ────────────────────────────────────────────────────────────
