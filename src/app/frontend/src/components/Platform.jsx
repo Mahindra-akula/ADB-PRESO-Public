@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 
 const LAYER_COLOR = { Bronze: '#c0392b', Silver: '#7f8c8d', Gold: '#f39c12' }
 
@@ -12,16 +11,9 @@ function StatCard({ label, value, sub }) {
   )
 }
 
-export default function Platform() {
-  const [stats, setStats] = useState(null)
-  const [err,   setErr]   = useState(null)
-
-  useEffect(() => {
-    fetch('/api/platform-stats').then(r => r.json()).then(setStats).catch(setErr)
-  }, [])
-
-  if (err)   return <div style={{ padding: 40, color: '#e74c3c' }}>Error: {err.message}</div>
-  if (!stats) return <div style={{ padding: 40, color: '#888' }}>Loading platform stats...</div>
+export default function Platform({ data: stats, error }) {
+  if (error)  return <div style={{ padding: 40, color: '#e74c3c' }}>Error: {error}</div>
+  if (!stats)  return <div style={{ padding: 40, color: '#888' }}>Loading platform stats...</div>
 
   const totalRows = stats.tables.reduce((s, t) => s + t.rows, 0)
 

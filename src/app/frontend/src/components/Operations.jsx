@@ -1,22 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 
-export default function Operations() {
-  const [alerts,   setAlerts]   = useState(null)
-  const [regional, setRegional] = useState(null)
-  const [cats,     setCats]     = useState(null)
-  const [err,      setErr]      = useState(null)
-  const [ordered,  setOrdered]  = useState({})
+export default function Operations({ alerts, regional, cats, error }) {
+  const [ordered, setOrdered] = useState({})
 
-  useEffect(() => {
-    Promise.all([
-      fetch('/api/top-alerts').then(r => r.json()),
-      fetch('/api/regional').then(r => r.json()),
-      fetch('/api/categories').then(r => r.json()),
-    ]).then(([a, r, c]) => { setAlerts(a); setRegional(r); setCats(c) }).catch(setErr)
-  }, [])
-
-  if (err)    return <div style={{ padding: 40, color: '#e74c3c' }}>Error: {err.message}</div>
+  if (error)  return <div style={{ padding: 40, color: '#e74c3c' }}>Error: {error}</div>
   if (!alerts) return <div style={{ padding: 40, color: '#888' }}>Loading data from Databricks...</div>
 
   const STATUS_COLOR = { 'REORDER NOW': '#e74c3c', 'WATCH': '#f39c12', 'OK': '#27ae60' }

@@ -1,4 +1,5 @@
 import os
+import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -13,15 +14,24 @@ from databricks.sdk.service.sql import StatementState
 app = FastAPI()
 
 WAREHOUSE_ID = os.environ.get("WAREHOUSE_ID", "4e7b8de25b26878f")
+CACHE_TTL    = 3600  # 1 hour — survive a full demo without re-hitting the warehouse
 
-# SDK auto-reads DATABRICKS_HOST + DATABRICKS_TOKEN (or M2M OAuth) from environment
 _client = None
+_cache: dict = {}  # { key: (fetched_at, result) }
 
 def get_client():
     global _client
     if _client is None:
         _client = WorkspaceClient()
     return _client
+
+def cached(key: str, fn):
+    now = time.time()
+    if key in _cache and now - _cache[key][0] < CACHE_TTL:
+        return _cache[key][1]
+    result = fn()
+    _cache[key] = (now, result)
+    return result
 
 
 def query(sql_text: str):
@@ -42,6 +52,9 @@ def query(sql_text: str):
 
 @app.get("/api/summary")
 def summary():
+    return cached("summary", _summary)
+
+def _summary():
     status_rows = query("""
         SELECT replenishment_status,
                COUNT(*) AS cnt,
@@ -72,6 +85,9 @@ def summary():
 
 @app.get("/api/regional")
 def regional():
+    return cached("regional", _regional)
+
+def _regional():
     rows = query("""
         SELECT s.region, r.replenishment_status, COUNT(*) AS cnt
         FROM retail_intelligence.retail_data.replenishment_signals r
@@ -90,6 +106,9 @@ def regional():
 
 @app.get("/api/top-alerts")
 def top_alerts():
+    return cached("top-alerts", _top_alerts)
+
+def _top_alerts():
     return query("""
         SELECT s.region, r.store_id, k.category, r.sku_id,
                ROUND(r.days_of_supply, 1) AS days_of_supply,
@@ -106,6 +125,9 @@ def top_alerts():
 
 @app.get("/api/categories")
 def categories():
+    return cached("categories", _categories)
+
+def _categories():
     return query("""
         SELECT k.category,
                COUNT(*) AS stores_at_risk,
@@ -120,6 +142,9 @@ def categories():
 
 @app.get("/api/platform-stats")
 def platform_stats():
+    return cached("platform-stats", _platform_stats)
+
+def _platform_stats():
     tables = [
         ("pos_transactions_raw",  "Bronze"),
         ("pos_store_sku_signals", "Silver"),
