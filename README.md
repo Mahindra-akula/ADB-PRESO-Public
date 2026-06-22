@@ -304,6 +304,34 @@ print(f"Dashboard ID: {result.dashboard_id}")
 
 ---
 
+## App — Performance Architecture (Demo-Critical)
+
+Two techniques ensure the app feels instant during a live demo:
+
+**Backend: 1-hour in-memory cache**
+Every read endpoint is wrapped with a `cached(key, fn)` helper. First API call hits the warehouse (2–5s); all subsequent calls within 1 hour return instantly from memory. Data doesn't change mid-demo.
+
+**Frontend: data lifting + display:none tabs**
+All four API endpoints are fetched once in `App.jsx` on mount. Results are passed as props to tab components — no component ever makes its own `fetch()` call. Tab switching is instant because:
+1. No data to re-fetch — props already set
+2. `display: none/block` keeps all components mounted (including the Executive iframe) — no unmount/remount on click
+
+```jsx
+// App.jsx — single useEffect, all data loaded once
+useEffect(() => {
+  fetch('/api/top-alerts').then(r => r.json()).then(setAlerts)
+  fetch('/api/regional').then(r => r.json()).then(setRegional)
+  // ...
+}, [])  // empty dep array — runs once only
+
+// Tab switching — display:none keeps components alive
+<div style={{ display: active === 'operations' ? 'block' : 'none' }}>
+  <Operations alerts={alerts} regional={regional} />
+</div>
+```
+
+---
+
 ## App — Order Now Email Feature
 
 The Operations tab has an **Order Now** button per row that emails a purchase order. Configure via env vars in `src/app/app.yaml`:

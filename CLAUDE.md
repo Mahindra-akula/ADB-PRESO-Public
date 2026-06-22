@@ -120,6 +120,11 @@ resources/
 - FastAPI: mount `/assets` first, then catch-all `/{full_path:path}` → `index.html`
 - Rebuild React (`npm run build`) before every bundle deploy after frontend changes
 
+### Demo Performance (Critical for live demos)
+- **Backend cache**: wrap every read endpoint with a 1-hour `cached(key, fn)` — first hit warms, subsequent hits instant
+- **Data lifting**: fetch all API data in App.jsx `useEffect([], [])` once on mount; pass results as props to tab components — eliminates per-tab 2-second warehouse round-trip
+- **display:none/block tabs**: render all tab components at all times; show/hide with CSS only — keeps iframe mounted (no reload) and props-received components alive with their data
+
 ### Unity Catalog Grants for App SP (first deploy only)
 ```sql
 GRANT USE CATALOG ON CATALOG retail_intelligence TO `b768d7ff-8d57-45ca-a0af-669edbe80d32`;

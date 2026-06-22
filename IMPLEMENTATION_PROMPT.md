@@ -10,14 +10,14 @@ Build a working Databricks prototype that solves a **12% stockout rate** for an 
 ## Workspace
 | Setting | Value |
 |---------|-------|
-| Host | `https://dbc-eaeac0c1-f644.cloud.databricks.com` |
+| Host | your Databricks workspace host |
 | Profile | `DEFAULT` |
 | Catalog | `retail_intelligence` |
 | Schema | `retail_data` (single schema — DLT target) |
 | Volume | `/Volumes/retail_intelligence/retail_data/raw_pos/` |
-| SQL Warehouse | `4e7b8de25b26878f` (Serverless Starter) |
+| SQL Warehouse | your serverless warehouse ID |
 | Compute | **Serverless only** — no classic clusters, no node type pinning |
-| Table refs | Always three-part: `retail_intelligence.retail_data.table` |
+| Table refs | Always three-part: `catalog.schema.table` |
 
 ---
 
@@ -35,10 +35,10 @@ Build a working Databricks prototype that solves a **12% stockout rate** for an 
 - Use **`databricks-sdk`** for all data access — NOT `databricks-sql-connector`
 - The SDK's `WorkspaceClient()` auto-reads `DATABRICKS_HOST` + `DATABRICKS_TOKEN` injected by the Apps platform
 - `databricks-sql-connector` ignores the injected token and tries OAuth browser flow → fails with "no free port"
-- All values from `statement_execution` come back as **strings** — always convert: `int(float(x))` for floats, `int(x)` for integer counts
+- All values from `statement_execution` come back as **strings** — always convert: `int(float(x))` for ROUND/SUM floats, `int(x)` for integer counts
 
 ### App Service Principal Permissions
-- The app creates its own service principal (UUID = `app_oauth2_app_client_id` field in `databricks apps get`)
+- The app creates its own service principal (UUID in `oauth2_app_client_id` field from `databricks apps get`)
 - Grant Unity Catalog access via SQL using the UUID (not the display name):
   ```sql
   GRANT USE CATALOG ON CATALOG retail_intelligence TO `<sp-uuid>`;
@@ -50,6 +50,12 @@ Build a working Databricks prototype that solves a **12% stockout rate** for an 
 - Build output goes to `src/app/static/` — this is the only directory that gets deployed
 - Add `node_modules/` and all source files to `.databricksignore` — 57MB of npm packages will stall deployment
 - FastAPI serves `/assets` as `StaticFiles`, then catch-all `/{full_path:path}` returns `index.html`
+- **Always `npm run build` before `bundle deploy`** after any frontend change
+
+### Demo Performance (Critical)
+- Backend: wrap all read endpoints with a **1-hour in-memory cache** — warehouse queries take 2–5s cold; cached they're instant
+- Frontend: **lift all data fetches to App.jsx** (single `useEffect` on mount), pass results as props to tabs — eliminates per-tab refetch latency
+- Frontend: use **`display:none/block`** not conditional rendering for tabs — keeps all components mounted, preserving iframe state and avoiding remount
 
 ---
 
@@ -70,13 +76,18 @@ ADB-preso/
 │   ├── notebooks/
 │   │   └── 01_kpi_validation.sql       ← demo queries with # DEMO: cues
 │   └── app/
-│       ├── app.yaml                    ← App manifest (uvicorn command)
-│       ├── main.py                     ← FastAPI backend (SDK auth)
+│       ├── app.yaml                    ← App manifest (uvicorn command + env vars)
+│       ├── main.py                     ← FastAPI backend (SDK auth + 1-hour cache)
 │       ├── requirements.txt            ← fastapi, uvicorn[standard], databricks-sdk
-│       ├── static/                     ← React build output (committed)
+│       ├── static/                     ← React build output (committed + deployed)
 │       └── frontend/                   ← React source (not deployed)
-├── PROMPT.md
-└── IMPLEMENTATION_PROMPT.md
+│           └── src/
+│               ├── App.jsx             ← 4-tab nav, data lifting, display:none switching
+│               └── components/
+│                   ├── Executive.jsx   ← iframe → AI/BI dashboard
+│                   ├── Operations.jsx  ← Reorder alerts + Order Now button
+│                   ├── Platform.jsx    ← Pipeline health stats
+│                   └── Architecture.jsx← Static diagram
 ```
 
 ---
@@ -100,11 +111,11 @@ targets:
     default: true
     mode: development
     workspace:
-      host: https://dbc-eaeac0c1-f644.cloud.databricks.com
+      host: https://YOUR_WORKSPACE_HOST
       profile: DEFAULT
 ```
 
-**`.databricksignore`**
+**`.databricksignore`** — create this BEFORE first deploy
 ```
 src/app/frontend/node_modules/
 src/app/frontend/src/
@@ -114,11 +125,6 @@ src/app/frontend/package-lock.json
 src/app/frontend/vite.config.js
 src/app/frontend/index.html
 src/app/app.py
-config/
-data/
-pipelines/
-notebooks/
-app/
 ```
 
 ---
@@ -136,15 +142,7 @@ resources:
           notebook_task:
             notebook_path: ../src/data/00_synthetic_data_gen.py
             source: WORKSPACE
-          job_cluster_key: serverless
-      job_clusters:
-        - job_cluster_key: serverless
-          new_cluster:
-            num_workers: 0
-            spark_version: "15.4.x-scala2.12"
-            node_type_id: "i3.xlarge"
 ```
-> Note: For serverless notebook jobs, omit `job_clusters` and use `environment` only if needed. Simplest: let DABs infer serverless.
 
 **`resources/replenishment_pipeline.yml`**
 ```yaml
@@ -345,29 +343,53 @@ command:
   - "8000"
 env:
   - name: WAREHOUSE_ID
-    value: "4e7b8de25b26878f"
+    value: "YOUR_WAREHOUSE_ID"
+  # Optional: configure email for Order Now button
+  # - name: ORDER_EMAIL_TO
+  #   value: "buyer@company.com"
+  # - name: ORDER_EMAIL_FROM
+  #   value: "replenishment@company.com"
+  # - name: ORDER_EMAIL_PASSWORD
+  #   value: "gmail-app-password"
 ```
 
-**`src/app/main.py`**
+**`src/app/main.py`** — includes 1-hour cache + Order Now email endpoint
+
 ```python
 import os
+import time
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 
 app = FastAPI()
 
-WAREHOUSE_ID = os.environ.get("WAREHOUSE_ID", "4e7b8de25b26878f")
+WAREHOUSE_ID = os.environ.get("WAREHOUSE_ID", "YOUR_WAREHOUSE_ID")
+CACHE_TTL    = 3600  # 1 hour — survive a full demo without re-hitting the warehouse
 
-# WorkspaceClient auto-reads DATABRICKS_HOST + DATABRICKS_TOKEN injected by Apps platform
 _client = None
+_cache: dict = {}  # { key: (fetched_at, result) }
+
 def get_client():
     global _client
     if _client is None:
-        _client = WorkspaceClient()
+        _client = WorkspaceClient()   # Auto-reads DATABRICKS_HOST + DATABRICKS_TOKEN
     return _client
+
+def cached(key: str, fn):
+    now = time.time()
+    if key in _cache and now - _cache[key][0] < CACHE_TTL:
+        return _cache[key][1]
+    result = fn()
+    _cache[key] = (now, result)
+    return result
 
 
 def query(sql_text: str):
@@ -386,8 +408,13 @@ def query(sql_text: str):
     return [dict(zip(cols, row)) for row in (result.result.data_array or [])]
 
 
+# ── API routes ─────────────────────────────────────────────────────────────────
+
 @app.get("/api/summary")
 def summary():
+    return cached("summary", _summary)
+
+def _summary():
     status_rows = query("""
         SELECT replenishment_status,
                COUNT(*) AS cnt,
@@ -408,7 +435,7 @@ def summary():
     reorder_pct = next((float(r["pct"]) for r in status_rows if r["replenishment_status"] == "REORDER NOW"), 0)
     return {
         "stockout_rate_pct": reorder_pct,
-        "revenue_at_risk": int(float(rev[0]["rev"] or 0)),   # ROUND() returns float-string e.g. '4350213.0'
+        "revenue_at_risk": int(float(rev[0]["rev"] or 0)),  # ROUND() returns float-string e.g. '4350213.0'
         "total_stores": int(counts[0]["stores"]),
         "total_skus": int(counts[0]["skus"]),
         "status_counts": [{"status": r["replenishment_status"], "count": int(r["cnt"]), "pct": float(r["pct"])} for r in status_rows],
@@ -417,6 +444,9 @@ def summary():
 
 @app.get("/api/regional")
 def regional():
+    return cached("regional", _regional)
+
+def _regional():
     rows = query("""
         SELECT s.region, r.replenishment_status, COUNT(*) AS cnt
         FROM retail_intelligence.retail_data.replenishment_signals r
@@ -434,6 +464,9 @@ def regional():
 
 @app.get("/api/top-alerts")
 def top_alerts():
+    return cached("top-alerts", _top_alerts)
+
+def _top_alerts():
     return query("""
         SELECT s.region, r.store_id, k.category, r.sku_id,
                ROUND(r.days_of_supply, 1) AS days_of_supply,
@@ -449,6 +482,9 @@ def top_alerts():
 
 @app.get("/api/categories")
 def categories():
+    return cached("categories", _categories)
+
+def _categories():
     return query("""
         SELECT k.category, COUNT(*) AS stores_at_risk,
                ROUND(AVG(r.days_of_supply), 1) AS avg_days_supply
@@ -461,6 +497,9 @@ def categories():
 
 @app.get("/api/platform-stats")
 def platform_stats():
+    return cached("platform-stats", _platform_stats)
+
+def _platform_stats():
     tables = [
         ("pos_transactions_raw",  "Bronze"),
         ("pos_store_sku_signals", "Silver"),
@@ -474,7 +513,57 @@ def platform_stats():
     return {"tables": result, "last_updated": str(last[0]["last_updated"])}
 
 
-# Serve React SPA — mount assets first, then catch-all for client-side routing
+# ── Order Now endpoint ─────────────────────────────────────────────────────────
+
+class OrderRequest(BaseModel):
+    store_id: str
+    sku_id: str
+    region: str = ""
+    category: str = ""
+    days_of_supply: float = 0
+    inventory_on_hand: int = 0
+    avg_daily_demand_7d: float = 0
+
+@app.post("/api/order-sku")
+def order_sku(req: OrderRequest):
+    to_addr = os.environ.get("ORDER_EMAIL_TO", "")
+    if to_addr:
+        from_addr = os.environ.get("ORDER_EMAIL_FROM", "replenishment@retail-demo.com")
+        password  = os.environ.get("ORDER_EMAIL_PASSWORD", "")
+        smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+
+        msg = MIMEMultipart()
+        msg["From"]    = from_addr
+        msg["To"]      = to_addr
+        msg["Subject"] = f"URGENT: Purchase Order — SKU {req.sku_id} · Store {req.store_id}"
+        body = (
+            f"AUTOMATED REPLENISHMENT ORDER\n{'─'*40}\n"
+            f"Region:            {req.region}\n"
+            f"Store:             {req.store_id}\n"
+            f"SKU:               {req.sku_id}\n"
+            f"Category:          {req.category}\n"
+            f"Current Stock:     {req.inventory_on_hand} units\n"
+            f"Days of Supply:    {req.days_of_supply} days\n"
+            f"Avg Daily Demand:  {req.avg_daily_demand_7d} units/day\n\n"
+            f"Status: REORDER NOW — stock critically low.\n"
+            f"Triggered from the Retail Replenishment Intelligence platform."
+        )
+        msg.attach(MIMEText(body, "plain"))
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port) as srv:
+                srv.starttls()
+                if password:
+                    srv.login(from_addr, password)
+                srv.sendmail(from_addr, to_addr, msg.as_string())
+        except Exception:
+            pass
+
+    return {"ok": True, "store_id": req.store_id, "sku_id": req.sku_id}
+
+
+# ── Serve React SPA ────────────────────────────────────────────────────────────
+# Mount /assets BEFORE the catch-all route — order matters
 app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")
 
 @app.get("/{full_path:path}")
@@ -486,35 +575,147 @@ def serve_spa(full_path: str):
 
 ### Step 6 · React Frontend
 
-**`src/app/frontend/` structure:**
-```
-frontend/
-├── package.json       (react, recharts, vite)
-├── vite.config.js     (build outDir: ../static)
-├── index.html
-└── src/
-    ├── App.jsx        (4-tab nav)
-    └── components/
-        ├── Executive.jsx   (/api/summary → KPI tiles + bar + pie)
-        ├── Operations.jsx  (/api/top-alerts + /api/regional + /api/categories)
-        ├── Platform.jsx    (/api/platform-stats → row counts per layer)
-        └── Architecture.jsx (static JSX diagram — no API call)
-```
-
-**`vite.config.js`** — output to `../static` so the build lands in `src/app/static/`:
+**`src/app/frontend/vite.config.js`**
 ```js
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: '../static' },
+  build: { outDir: '../static', emptyOutDir: true },
   server: { proxy: { '/api': 'http://localhost:8000' } }
 })
 ```
 
+**`src/app/frontend/package.json`** (minimal)
+```json
+{
+  "name": "retail-replenishment-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "dev": "vite", "build": "vite build" },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.13.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.19"
+  }
+}
+```
+
+**`src/app/frontend/src/App.jsx`** — data lifting + display:none tab switching
+
+```jsx
+import { useState, useEffect } from 'react'
+import Executive from './components/Executive'
+import Operations from './components/Operations'
+import Platform from './components/Platform'
+import Architecture from './components/Architecture'
+
+const TABS = [
+  { key: 'executive',    label: 'Executive Overview'      },
+  { key: 'operations',   label: 'Operations Command Center'},
+  { key: 'platform',     label: 'Platform & Governance'   },
+  { key: 'architecture', label: 'Solution Architecture'   },
+]
+
+const DB_RED   = '#FF3621'
+const HEADER_H = 64
+const NAV_H    = 52
+
+export default function App() {
+  const [active, setActive] = useState('executive')
+
+  // All data fetched ONCE at mount — never re-fetches on tab switch
+  const [regional,  setRegional]  = useState(null)
+  const [alerts,    setAlerts]    = useState(null)
+  const [cats,      setCats]      = useState(null)
+  const [platform,  setPlatform]  = useState(null)
+  const [errors,    setErrors]    = useState({})
+
+  useEffect(() => {
+    const load = (url, setter, key) =>
+      fetch(url)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+        .then(setter)
+        .catch(e => setErrors(prev => ({ ...prev, [key]: e.message })))
+
+    load('/api/regional',       setRegional, 'regional')
+    load('/api/top-alerts',     setAlerts,   'alerts')
+    load('/api/categories',     setCats,     'cats')
+    load('/api/platform-stats', setPlatform, 'platform')
+  }, [])  // empty dep array — runs once only
+
+  return (
+    <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif", height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* Header */}
+      <div style={{ height: HEADER_H, padding: '0 32px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #e0e0e0', background: '#fff', flexShrink: 0 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: DB_RED }}>Retail Replenishment Intelligence</div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>800-Store Demand Signal Platform · Powered by Databricks</div>
+        </div>
+      </div>
+
+      {/* Nav */}
+      <div style={{ height: NAV_H, padding: '0 32px', display: 'flex', alignItems: 'center', background: '#fafafa', borderBottom: '1px solid #e0e0e0', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setActive(t.key)} style={{
+              padding: '7px 18px', cursor: 'pointer', borderRadius: 4, fontSize: 13, fontWeight: 600,
+              border: `1.5px solid ${DB_RED}`,
+              background: active === t.key ? DB_RED : '#fff',
+              color:      active === t.key ? '#fff' : DB_RED,
+              transition: 'all 0.15s',
+            }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Content — all tabs rendered but only active one visible */}
+      {/* display:none keeps components mounted — iframe stays loaded, no data re-fetch */}
+      <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+        <div style={{ display: active === 'executive'    ? 'block' : 'none', height: '100%' }}><Executive /></div>
+        <div style={{ display: active === 'operations'   ? 'block' : 'none', height: '100%' }}><Operations alerts={alerts} regional={regional} cats={cats} error={errors.alerts || errors.regional} /></div>
+        <div style={{ display: active === 'platform'     ? 'block' : 'none', height: '100%' }}><Platform   data={platform} error={errors.platform} /></div>
+        <div style={{ display: active === 'architecture' ? 'block' : 'none', height: '100%' }}><Architecture /></div>
+      </div>
+
+    </div>
+  )
+}
+```
+
+**`src/app/frontend/src/components/Executive.jsx`** — Lakeview iframe
+```jsx
+export default function Executive() {
+  return (
+    <iframe
+      src="https://YOUR_WORKSPACE_HOST/embed/dashboardsv3/YOUR_DASHBOARD_ID?o=YOUR_ORG_ID"
+      width="100%" height="100%" frameBorder="0"
+      allow="clipboard-write" style={{ display: 'block', border: 'none' }}
+    />
+  )
+}
+```
+
+**Props-based component pattern** (Operations, Platform):
+```jsx
+// Components receive data as props — no useEffect, no internal fetch
+export default function Operations({ alerts, regional, cats, error }) {
+  if (error)  return <div style={{ padding: 40, color: '#e74c3c' }}>Error: {error}</div>
+  if (!alerts) return <div style={{ padding: 40, color: '#888' }}>Loading...</div>
+  // ... render charts and table
+}
+```
+
 **Build command** (run before every deploy):
 ```bash
-cd src/app/frontend && npm install && npm run build
+cd src/app/frontend && npm install && npm run build && cd ../../..
 ```
 Build output (`src/app/static/`) is committed to the repo and deployed to the workspace.
 
@@ -525,13 +726,24 @@ Build output (`src/app/static/`) is committed to the repo and deployed to the wo
 After first `databricks bundle run replenishment_app`, the app creates a service principal.
 Get its UUID and grant Unity Catalog access:
 
+```bash
+# Get SP UUID
+databricks apps get retail-replenishment --profile DEFAULT | python -c "import sys,json; d=json.load(sys.stdin); print(d['oauth2_app_client_id'])"
+```
+
+Then run in a Databricks SQL worksheet (replace UUID):
+```sql
+GRANT USE CATALOG ON CATALOG retail_intelligence TO `<sp-uuid>`;
+GRANT USE SCHEMA ON SCHEMA retail_intelligence.retail_data TO `<sp-uuid>`;
+GRANT SELECT ON SCHEMA retail_intelligence.retail_data TO `<sp-uuid>`;
+```
+
+Or via Python SDK:
 ```python
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 
 w = WorkspaceClient(profile='DEFAULT')
-
-# Find the SP UUID — it's the oauth2_app_client_id from `databricks apps get <name>`
 sp_uuid = "<paste-from-databricks-apps-get-output>"
 
 for stmt in [
@@ -540,12 +752,10 @@ for stmt in [
     f"GRANT SELECT ON SCHEMA retail_intelligence.retail_data TO `{sp_uuid}`",
 ]:
     r = w.statement_execution.execute_statement(
-        warehouse_id='4e7b8de25b26878f', statement=stmt, wait_timeout='30s'
+        warehouse_id='YOUR_WAREHOUSE_ID', statement=stmt, wait_timeout='30s'
     )
     print(r.status.state, stmt[:60])
 ```
-
-> Get the UUID from: `databricks apps get retail-replenishment --profile DEFAULT | python -c "import sys,json; d=json.load(sys.stdin); print(d['oauth2_app_client_id'])"`
 
 ---
 
@@ -561,23 +771,23 @@ databricks bundle deploy --auto-approve --profile DEFAULT
 # 3. Run data generation job
 databricks bundle run data_gen_job --profile DEFAULT
 
-# 4. Run DLT pipeline
+# 4. Run DLT pipeline (kicks off in background — takes ~10 min)
 databricks bundle run replenishment_pipeline --profile DEFAULT
 
 # 5. Start app
 databricks bundle run replenishment_app --profile DEFAULT
 
-# 6. Grant SP permissions (first time only — get UUID first)
-# databricks apps get retail-replenishment --profile DEFAULT | python -c "import sys,json; d=json.load(sys.stdin); print(d['oauth2_app_client_id'])"
-# Then run the GRANT statements from Step 7
+# 6. Grant SP permissions (first time only — get UUID first, then SQL grants above)
 
 # 7. Restart app to pick up new permissions
 databricks bundle run replenishment_app --profile DEFAULT
+
+# 8. Verify all 4 tabs load correctly
 ```
 
 ---
 
-### Step 9 · KPI Validation Queries (Demo Script)
+### Step 9 · KPI Validation Queries
 
 **`src/notebooks/01_kpi_validation.sql`**
 
@@ -612,21 +822,20 @@ GROUP BY k.category, r.sku_id ORDER BY stores_at_risk DESC LIMIT 20;
 
 ---
 
-## Time Budget (60-min build)
+## Time Budget (~45 min build)
 
 | # | Task | Time |
 |---|------|------|
 | 1 | `databricks bundle deploy` — deploys all resources | 2 min |
 | 2 | `databricks bundle run data_gen_job` — generates 150K POS rows | 5 min |
-| 3 | `databricks bundle run replenishment_pipeline` — runs DLT (background) | kick off, 10 min to complete |
-| 4 | Build React: `npm install && npm run build` | 3 min |
+| 3 | `databricks bundle run replenishment_pipeline` — kick off DLT (background) | 10 min to complete |
+| 4 | `npm install && npm run build` | 3 min |
 | 5 | `databricks bundle run replenishment_app` — first deploy | 3 min |
-| 6 | Grant SP permissions (get UUID, run GRANT statements) | 3 min |
-| 7 | `databricks bundle run replenishment_app` — restart with permissions | 2 min |
-| 8 | Verify all 4 tabs load (DLT should be done by now) | 2 min |
+| 6 | Get SP UUID + run GRANT statements | 3 min |
+| 7 | Restart app + verify all 4 tabs | 4 min |
 | **Total** | | **~30 min** |
 
-> Remaining 30 min of build budget + 3h: presentation slides, pitch narrative, demo run-through.
+> DLT runs in background while you do steps 4–6. By the time you restart the app, gold table is ready.
 
 ---
 
@@ -639,6 +848,7 @@ GROUP BY k.category, r.sku_id ORDER BY stores_at_risk DESC LIMIT 20;
 | REORDER NOW rows | "These stores stock out tomorrow. Their Excel model wouldn't flag this until Monday's report." |
 | Revenue at risk tile | "$4.35M weekly — this is the dollar value of the problem we just quantified, before any optimization." |
 | App tab switch | "Each stakeholder gets their own view — one URL, all audiences, zero separate tools." |
+| Order Now button | "One click triggers a purchase order email. No ERP integration needed for the demo." |
 | Architecture tab | "POS to signal in three DLT steps. Streaming-ready — one line change in the bronze layer." |
 | CTO question | "Snowflake needs a separate BI tool, separate governance layer, separate orchestrator. This is one workspace." |
 
@@ -648,10 +858,13 @@ GROUP BY k.category, r.sku_id ORDER BY stores_at_risk DESC LIMIT 20;
 
 | Symptom | Root Cause | Fix |
 |---------|-----------|-----|
-| `INTERNAL_ERROR` on job run | `environment_key`/`environments`/`client:"1"` in job YAML | Remove those fields — Free Edition infers serverless |
-| App 500 on all API routes | `databricks-sql-connector` OAuth loop | Switch to `databricks-sdk` in `requirements.txt` + `main.py` |
+| `INTERNAL_ERROR` on job/pipeline run | `environment_key`/`environments`/`client:"1"` in YAML | Remove those fields — Free Edition infers serverless |
+| App 500 on all API routes — "no free port" | `databricks-sql-connector` OAuth loop | Switch to `databricks-sdk` in `requirements.txt` + `main.py` |
 | `ValueError: invalid literal for int()` | SDK returns all values as strings; `ROUND()` → `'4350213.0'` | Use `int(float(x))` for any SQL ROUND/SUM result |
 | Deployment stuck "Preparing source code" | `node_modules` in workspace from previous deploy | Delete via `databricks workspace delete --recursive .../frontend`, then redeploy |
 | Permission denied on API routes | App SP not granted Unity Catalog access | Run GRANT statements using SP's UUID (not display name) |
-| App still serving old version | Stale deployment | `databricks bundle run replenishment_app` triggers new deployment |
+| SP GRANT fails "principal not found" | Used display name instead of UUID | Use `oauth2_app_client_id` from `databricks apps get` |
+| App still serving old version | Stale deployment | `databricks bundle run replenishment_app` |
+| Tab switch causes 2-second reload | Components unmounting/remounting on each click | Use `display:none/block` not conditional rendering |
+| iframe reloads on every tab switch | iframe component unmounting | Ensure `display:none/block` pattern — never `{active === 'x' && <Component/>}` |
 | OAuth 401 on curl test | Databricks Apps requires browser OAuth for all routes | Expected — test via browser, not curl |
