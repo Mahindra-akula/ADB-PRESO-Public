@@ -39,18 +39,6 @@ export default function Architecture() {
         <Box label="Genie Space"             color="#7d3c98" detail={'Natural language\nOps team queries\nNo analyst needed'} />
       </div>
 
-      {/* Up arrow */}
-      <div style={{ textAlign: 'center', fontSize: 22, color: '#bbb', margin: '12px 0 6px' }}>↑</div>
-      <div style={{ textAlign: 'center', fontWeight: 700, color: DB_RED, fontSize: 14, marginBottom: 40 }}>
-        Databricks App (this screen) — React + FastAPI · one URL, every audience, zero connectors
-      </div>
-
-      {/* Footer */}
-      <div style={{ borderTop: '1px solid #eee', paddingTop: 20, textAlign: 'center', color: '#aaa', fontSize: 12 }}>
-        <span style={{ marginRight: 24 }}>Serverless compute only</span>
-        <span style={{ marginRight: 24 }}>Unity Catalog · three-part table refs</span>
-        <span>SQL-first · Delta Lake · no pandas</span>
-      </div>
     </div>
   )
 }

@@ -66,7 +66,6 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div style={{ fontSize: 12, color: '#999', fontStyle: 'italic' }}>{current?.sub}</div>
       </div>
 
       {/* Content — all tabs rendered but only active one visible, so state is preserved */}
