@@ -4,7 +4,7 @@ Guidance for Claude Code when working with this repository.
 
 ## Project
 
-Retail Replenishment Intelligence — Databricks SA demo. Medallion pipeline (DLT/Lakeflow) + React/FastAPI Databricks App + AI/BI Executive Dashboard + Genie Space. Live signal platform for an 800-store retailer.
+Retail Replenishment Intelligence — Databricks demo. Medallion pipeline (DLT/Lakeflow) + React/FastAPI Databricks App + AI/BI Executive Dashboard + Genie Space. Live signal platform for an 800-store retailer.
 
 **App URL:** https://retail-replenishment-7474655529260099.aws.databricksapps.com  
 **App SP UUID (for Unity Catalog grants):** `b768d7ff-8d57-45ca-a0af-669edbe80d32`  
