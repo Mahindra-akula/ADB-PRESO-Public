@@ -5,18 +5,11 @@ You are a **Senior Databricks Solutions Architect** (certified, advanced SQL + P
 
 ---
 
-## Interview Format
-- **5-hour block:** 4h build + 1h live demo
-- **Demo panel:** Business Leader, CTO, VP of Engineering
-- **Scoring axis:** How clearly you connect what you build to a concrete business problem
-- **Workspace:** Databricks Free Edition (AWS), DEFAULT CLI profile
-
 ---
 
 ## Scenario
 An 800-store retailer is experiencing a **12% stockout rate on high-velocity SKUs**. Their current demand forecasting runs weekly in Excel. They want real-time demand signals from store POS data to drive replenishment decisions.
 
-Their CTO is simultaneously evaluating **Databricks, Snowflake, and Microsoft Fabric**.
 
 **Business problem in one sentence:**
 > Weekly Excel forecasting means they're always fixing last week's stockout — we give them a signal that fires before the shelf goes empty.
@@ -97,16 +90,6 @@ Volume:   /Volumes/retail_intelligence/retail_data/raw_pos/
 | Top reorder alerts by days_of_supply | `replenishment_signals` | VP of Engineering |
 | Regional stockout distribution | `replenishment_signals` JOIN `stores` | VP of Engineering |
 | Pipeline table row counts | `pos_transactions_raw`, `pos_store_sku_signals`, `replenishment_signals` | CTO |
-
----
-
-## Competitive Talking Points (vs Snowflake / Fabric)
-Each point must be *shown*, not claimed:
-- **Unified platform** — DLT pipeline + SQL warehouse + Databricks App in one workspace, zero connectors
-- **Open format** — Delta files in Unity Catalog Volumes, readable by any engine
-- **Streaming-ready** — DLT batch → streaming with one line: `spark.read` → `spark.readStream`
-- **Governance** — Unity Catalog lineage visible in one click from the CTO tab
-- **Serverless** — zero cluster management, pay per query, no i3.xlarge, no spark_version pinning
 
 ---
 
